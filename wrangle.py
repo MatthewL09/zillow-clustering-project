@@ -5,7 +5,7 @@ import os
 from env import username, password, host
 
 
-######## acquire ##########
+######  acquire  ######
 
 def get_zillow_data(use_cache=True):
     '''This function returns the data from the zillow database in Codeup Data Science Database. 
@@ -39,11 +39,12 @@ def get_zillow_data(use_cache=True):
 ######## cleaning/prep ###############
 
 def clean_zillow(df):
-    '''takes in zillow and removes redundant columns, and returns a clean version '''
-    # selecting landusetypeid for single family homes
+    '''takes in zillow and removes redundant columns, and returns a clean version
+     '''
+     # selecting landusetypeid for single family homes
     df = df[df.propertylandusetypeid.isin([260,261,262,263,264,265,266,268,273,275,276,279])]
-    
-    # set datafram to houses with at least 1 bed/bath each
+
+    # set dataframe to houses with at least 1 bed/bath each
     df = df[(df.bedroomcnt > 0) & (df.bathroomcnt > 0)] 
 
     # filling null values with most popular
@@ -59,21 +60,32 @@ def clean_zillow(df):
     df['county'] = np.where(df.fips == 6037, 'Los_Angeles',
                            np.where(df.fips == 6059, 'Orange', 
                                    'Ventura'))  
-
-    # add a column with information from yearbuilt column
-    df['age'] = 2022 - df.yearbuilt
-
-    # columns to drop
-    remove_columns = ['propertylandusetypeid', 'calculatedbathnbr', 'heatingorsystemtypeid', 'parcelid', 'propertyzoningdesc', 'id', 'id.1', 'rawcensustractandblock', 'fips', 'yearbuilt']
-    df = df.drop(columns = remove_columns)
     
     col_list = ['bathroomcnt', 'bedroomcnt', 'calculatedfinishedsquarefeet', 'calculatedfinishedsquarefeet', 'calculatedfinishedsquarefeet', 'taxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxamount', 'logerror'] 
+    # k value set to 3.0 to allow more outliers to be left 
     df = remove_outliers(df, 3.0, col_list)
+
+    # add a column with information from yearbuilt column
+    df['age'] = 2017 - df.yearbuilt
+    
+    df['sqft_per_bed'] = df['calculatedfinishedsquarefeet'] / df['bedroomcnt']
+    df['sqft_per_bath'] = df['calculatedfinishedsquarefeet'] / df['bathroomcnt']
+    df['total_rooms'] = df['bedroomcnt'] + df['bathroomcnt']
+    df['bed_bath_rooms_per_sqft_living'] = df['total_rooms'] / df['calculatedfinishedsquarefeet']
+    df['taxrate'] = df['taxamount'] / df['taxvaluedollarcnt']
+    df['dollars_per_sqft'] = df['taxvaluedollarcnt'] / df['calculatedfinishedsquarefeet']
+
+     # columns to drop
+    remove_columns = ['propertylandusetypeid', 'calculatedbathnbr', 'heatingorsystemtypeid', 'parcelid', 'propertyzoningdesc', 'id', 'id.1', 'rawcensustractandblock',
+     'fips', 'yearbuilt', 'fullbathcnt',  'buildingqualitytypeid']
+    df = df.drop(columns = remove_columns)       
 
     return df
 
 def handle_missing_values(df, prop_required_column = .55, prop_required_row = .7):
-    ''' takes in a datafram and is defaulted to have at least 55 percent of values for columns and 70 percent for rows'''
+    ''' 
+    Takes in a datafram and is defaulted to have at least 55 percent of values for columns and 70 percent for rows
+    '''
     threshold = int(round(prop_required_column * len(df.index),0))
     df.dropna(axis=1, thresh = threshold, inplace = True)
     threshold = int(round(prop_required_row * len(df.columns), 0))
@@ -81,7 +93,9 @@ def handle_missing_values(df, prop_required_column = .55, prop_required_row = .7
     return df
 
 def nulls_by_col(df):
-    ''' Takes in a dataframe and will output a dataframe of information for columns missing'''
+    ''' 
+    Takes in a dataframe and will output a dataframe of information for columns missing
+    '''
     num_missing = df.isnull().sum()
     rows = df.shape[0]
     percent_missing = num_missing / rows
@@ -89,7 +103,9 @@ def nulls_by_col(df):
     return cols_missing
 
 def nulls_by_row(df):
-    ''' Takes in a dataframe and will output a dataframe of information for rows missing'''
+    ''' 
+    Takes in a dataframe and will output a dataframe of information for rows missing
+    '''
     num_cols_missing = df.isnull().sum(axis=1)
     pct_cols_missing = df.isnull().sum(axis=1)/df.shape[1]*100
     rows_missing = pd.DataFrame({'num_cols_missing':num_cols_missing, 'pct_cols_missing':pct_cols_missing}).reset_index().groupby(['num_cols_missing','pct_cols_missing']).count().rename(index=str, columns={'index': 'num_rows'}).reset_index()
@@ -140,9 +156,12 @@ def split_data(df, random_state=123, stratify=None):
     return train, validate, test
 
 def handle_nulls(train, validate, test):
+    ''' 
+    This function will take in your split data and handle the continuous columns with the mode
+    and will handle the categorical columns with the median
+    '''
     # continuous values filled with mode
     cols = [
-    'buildingqualitytypeid',
     'regionidzip',
     'regionidcity',
     'censustractandblock',
@@ -157,14 +176,12 @@ def handle_nulls(train, validate, test):
     # categorical columns filled with median
 
     cols = [
-    'buildingqualitytypeid',
     'taxamount',
     'taxvaluedollarcnt',
     'landtaxvaluedollarcnt',
     'structuretaxvaluedollarcnt',
     'finishedsquarefeet12',
     'calculatedfinishedsquarefeet',
-    'fullbathcnt',
     'lotsizesquarefeet'
     ]
 
