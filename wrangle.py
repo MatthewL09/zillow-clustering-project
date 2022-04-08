@@ -1,6 +1,13 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.stats as stats
+
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.cluster import KMeans
+
 import os
 from env import username, password, host
 
@@ -44,8 +51,8 @@ def clean_zillow(df):
      # selecting landusetypeid for single family homes
     df = df[df.propertylandusetypeid.isin([260,261,262,263,264,265,266,268,273,275,276,279])]
 
-    # set dataframe to houses with at least 1 bed/bath each
-    df = df[(df.bedroomcnt > 0) & (df.bathroomcnt > 0)] 
+    # set dataframe to houses with at least an acceptable amount of bedroom/baths, sqft is minimum requirement for LA, yearbuilt LA aquaduct completion in 1913
+    df = df[(df.bedroomcnt < 8) & ( df.bathroomcnt < 7) & (df.yearbuilt >= 1920) & (df.calculatedfinishedsquarefeet > 800) ] 
 
     # filling null values with most popular
     df.unitcnt = df.unitcnt.fillna(1.0)
@@ -60,27 +67,25 @@ def clean_zillow(df):
     df['county'] = np.where(df.fips == 6037, 'Los_Angeles',
                            np.where(df.fips == 6059, 'Orange', 
                                    'Ventura'))  
+
+    # columns to drop
+    remove_columns = ['propertylandusetypeid', 'calculatedbathnbr', 'heatingorsystemtypeid', 'parcelid', 'propertyzoningdesc', 'id', 'id.1', 'rawcensustractandblock',
+     'fips',  'fullbathcnt',  'buildingqualitytypeid', 'roomcnt', 'assessmentyear', 'finishedsquarefeet12', 'propertycountylandusecode']
+    df = df.drop(columns = remove_columns)                              
     
-    col_list = ['bathroomcnt', 'bedroomcnt', 'calculatedfinishedsquarefeet', 'calculatedfinishedsquarefeet', 'calculatedfinishedsquarefeet', 'taxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxamount', 'logerror'] 
+    col_list = ['bathroomcnt', 'bedroomcnt', 'calculatedfinishedsquarefeet', 'taxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxamount', 'logerror'] 
     # k value set to 3.0 to allow more outliers to be left 
     df = remove_outliers(df, 3.0, col_list)
 
     # add a column with information from yearbuilt column
     df['age'] = 2017 - df.yearbuilt
-    
-    df['sqft_per_bed'] = df['calculatedfinishedsquarefeet'] / df['bedroomcnt']
-    df['sqft_per_bath'] = df['calculatedfinishedsquarefeet'] / df['bathroomcnt']
-    df['total_rooms'] = df['bedroomcnt'] + df['bathroomcnt']
-    df['bed_bath_rooms_per_sqft_living'] = df['total_rooms'] / df['calculatedfinishedsquarefeet']
     df['taxrate'] = df['taxamount'] / df['taxvaluedollarcnt']
     df['dollars_per_sqft'] = df['taxvaluedollarcnt'] / df['calculatedfinishedsquarefeet']
-
-     # columns to drop
-    remove_columns = ['propertylandusetypeid', 'calculatedbathnbr', 'heatingorsystemtypeid', 'parcelid', 'propertyzoningdesc', 'id', 'id.1', 'rawcensustractandblock',
-     'fips', 'yearbuilt', 'fullbathcnt',  'buildingqualitytypeid']
-    df = df.drop(columns = remove_columns)       
+    df = age_bin(df)
 
     return df
+
+######################################
 
 def handle_missing_values(df, prop_required_column = .55, prop_required_row = .7):
     ''' 
@@ -92,6 +97,8 @@ def handle_missing_values(df, prop_required_column = .55, prop_required_row = .7
     df.dropna(axis = 0, thresh = threshold, inplace = True)
     return df
 
+######################################
+
 def nulls_by_col(df):
     ''' 
     Takes in a dataframe and will output a dataframe of information for columns missing
@@ -102,6 +109,8 @@ def nulls_by_col(df):
     cols_missing = pd.DataFrame({'number_missing_rows':num_missing, 'percent_rows_missing': percent_missing})
     return cols_missing
 
+######################################
+
 def nulls_by_row(df):
     ''' 
     Takes in a dataframe and will output a dataframe of information for rows missing
@@ -111,6 +120,7 @@ def nulls_by_row(df):
     rows_missing = pd.DataFrame({'num_cols_missing':num_cols_missing, 'pct_cols_missing':pct_cols_missing}).reset_index().groupby(['num_cols_missing','pct_cols_missing']).count().rename(index=str, columns={'index': 'num_rows'}).reset_index()
     return rows_missing
 
+######################################
 
 def remove_outliers(df, k, col_list):
     ''' 
@@ -130,7 +140,9 @@ def remove_outliers(df, k, col_list):
         df = df[(df[col] > lower_bound) & (df[col] < upper_bound)]
         
     return df
- 
+
+######################################
+
 def split_data(df, random_state=123, stratify=None):
     '''
     This function takes in a dataframe and splits the data into train, validate and test samples. 
@@ -154,6 +166,8 @@ def split_data(df, random_state=123, stratify=None):
 
     # results in 3 dataframes
     return train, validate, test
+
+######################################
 
 def handle_nulls(train, validate, test):
     ''' 
@@ -180,7 +194,6 @@ def handle_nulls(train, validate, test):
     'taxvaluedollarcnt',
     'landtaxvaluedollarcnt',
     'structuretaxvaluedollarcnt',
-    'finishedsquarefeet12',
     'calculatedfinishedsquarefeet',
     'lotsizesquarefeet'
     ]
@@ -192,3 +205,230 @@ def handle_nulls(train, validate, test):
         test[col].fillna(median, inplace = True)
 
     return train, validate, test
+
+######################################
+
+def absolute_logerror(df):
+    '''
+    This function creates another column called abs_logerror from the logerror column
+    '''
+    df['abs_logerror'] = df['logerror'].abs()    
+    return df
+
+######################################
+
+def age_bin(df):
+    '''
+    Function takes in a dataframe, uses the 'yearbuilt' column to create age bins
+    pre 1970, 1970-2000, and post 2000 
+    '''
+    # set bin sizes
+    year_bins = [df['yearbuilt'].min(), 1970, 2000,df['yearbuilt'].max()]
+    
+    # use cut to assign bins using yearbuilt column
+    df['age_bin'] = pd.cut(df['yearbuilt'], year_bins)
+    
+    return df
+
+######################################
+
+def get_median_baseline(train, validate, test):
+    '''
+    function takes in train validate test.
+    Adds column with the baseline predictions based on the mean of train to each dataframe.
+    returns train, validate, test
+    '''
+    train['baseline'] = train.abs_logerror.median()
+    validate['baseline'] = train.abs_logerror.median()
+    test['baseline'] = train.abs_logerror.median()
+    
+    return train, validate, test
+
+######################################
+
+def scale_this(X_data, scalertype):
+    '''
+    X_data = dataframe with specified columns 
+    scalertype = either StandardScaler() or MinMaxScaler()
+    This function takes a dataframe (X_data), a scaler, and ouputs a new dataframe with those columns scaled. 
+    And a scaler for inverse transformation
+    '''
+    scaler = scalertype.fit(X_data)
+
+    X_scaled = pd.DataFrame(scaler.transform(X_data), columns = X_data.columns).set_index([X_data.index.values])
+    
+    return X_scaled, scaler
+
+######################################
+
+def get_X_train_y_train(X_cols, y_col, train, validate, test):
+    '''
+    columns should be scaled for the modeling
+    X_cols = list of columns to be used as features
+    y_col = name of the target column
+    train = train dataframe
+    validate = validate dataframe
+    test = test dataframe
+    returns X_train, y_train, X_validate, y_validate, X_test, and y_test
+    '''  
+    # X is the data frame of the features, y is a series of the target
+    X_train, y_train = train[X_cols], train[y_col]
+    X_validate, y_validate = validate[X_cols], validate[y_col]
+    X_test, y_test = test[X_cols], test[y_col]
+    
+    return X_train, y_train, X_validate, y_validate, X_test, y_test
+
+######################################
+
+def get_zillow_dummies(train, validate, test, cat_columns = ['age_bin', 'county', 'lat_long_age_cluster']):
+    '''
+    This function takes in train, validate, test and a list of categorical columns for dummies (cat_columns)
+    default col_list is for zillow 
+    '''
+    # create dummies 
+    train = pd.get_dummies(data = train, columns = cat_columns, drop_first=False)
+    validate = pd.get_dummies(data = validate, columns = cat_columns, drop_first=False)
+    test = pd.get_dummies(data = test, columns = cat_columns, drop_first=False)
+
+
+    # drop columns I don't want (specified above)
+    train = train.drop(columns=['age_bin_(1970.0, 2000.0]', 'county_Ventura', 'lat_long_age_cluster_0'])
+    validate = validate.drop(columns=['age_bin_(1970.0, 2000.0]', 'county_Ventura', 'lat_long_age_cluster_0'])
+    test = test.drop(columns=['age_bin_(1970.0, 2000.0]', 'county_Ventura', 'lat_long_age_cluster_0'])
+
+    # rename age bins because they have a dumb name
+    train = train.rename(columns={'age_bin_(1920.0, 1970.0]': 'built_before_1970', 
+                                  'age_bin_(2000.0, 2016.0]': 'built_after_2000'})
+    validate = validate.rename(columns={'age_bin_(1920.0, 1970.0]': 'built_before_1970', 
+                                  'age_bin_(2000.0, 2016.0]': 'built_after_2000'})
+    test = test.rename(columns={'age_bin_(1920.0, 1970.0]': 'built_before_1970', 
+                                  'age_bin_(2000.0, 2016.0]': 'built_after_2000'})
+    
+    return train, validate, test
+
+
+######################################
+
+def plot_inertia(X_data, k_range_start = 1, k_range_end = 10):
+    '''
+    This function takes in a dataframe (must be scaled)
+    Plots the change in inertia with 'x' markers
+    Optional argument to adjust the range, default range(2,10)
+    '''
+    with plt.style.context('seaborn-whitegrid'):
+        plt.figure(figsize=(10, 7))
+        pd.Series({k: KMeans(k).fit(X_data).inertia_ for k in range(k_range_start, k_range_end)}).plot(marker='x')
+        plt.xticks(range(k_range_start -1, k_range_end))
+        plt.xlabel('k')
+        plt.ylabel('inertia')
+        plt.title('Change in inertia as k increases')
+
+######################################
+
+def scale_this2(train, validate, test, cont_columns, scaler): 
+    '''
+    This function takes in train, validate, and test, columns desired to be scaled (as a list), 
+    a scaler (i.e. MinMaxScaler(), with parameters needed),
+    cont_columns: list of columns for scaling
+    Replaces columns with scaled columns 
+    Outputs scaler for doing inverse transforms.
+    '''
+    # create scaler (minmax scaler)
+    minmax_scaler = scaler
+    
+    # loop through columns in columns_list
+    for col in cont_columns:
+        # fit and transform to train, add new columns on train df
+        train[f'{col}'] = minmax_scaler.fit_transform(train[[col]]) 
+        
+        # transform columns from validate / test (only fit on train)
+        validate[f'{col}']= minmax_scaler.transform(validate[[col]])
+        test[f'{col}']= minmax_scaler.transform(test[[col]])
+
+    # returns scaler and a list of columns to be used for X_train, X_validate, X_test
+    return train, validate, test, scaler 
+
+######################################
+
+def create_clusters(train, validate, test, cols_for_cluster, k, col_name = None ):
+    '''
+    This function takes in scaled train, validate, and test
+    k (number of clusters desired) and cluster_columns that has been created specifically for clustering
+    Optional argumenet col_name, none is defaulted so column returned is 'clusters'
+    Returned dataframes with column attached  and kmeans
+    Returns: train, validate, test, kmeans
+    Use for making some magic
+    ''' 
+    # make thing
+    kmeans = KMeans(n_clusters=k, random_state=123)
+
+    #Fit Thing
+    kmeans.fit(train[cols_for_cluster])
+    
+    if col_name == None:
+        # add cluster predictions on dataframe generic
+        train['clusters'] = kmeans.predict(train[cols_for_cluster])
+        train.clusters = train.clusters.astype('category')
+        validate['clusters'] = kmeans.predict(validate[cols_for_cluster])
+        validate.clusters = validate.clusters.astype('category')
+        test['clusters'] = kmeans.predict(test[cols_for_cluster])
+        test.clusters = test.clusters.astype('category')
+    else:
+        # add cluster predictions on dataframe specific name
+        train[col_name] = kmeans.predict(train[cols_for_cluster])
+        train[col_name] = train[col_name].astype('category')
+        validate[col_name] = kmeans.predict(validate[cols_for_cluster])
+        validate[col_name] = validate[col_name].astype('category')
+        test[col_name] = kmeans.predict(test[cols_for_cluster])
+        test[col_name] = test[col_name].astype('category')
+        
+    return train, validate, test, kmeans
+
+###################################### model prep ######################################
+
+def some_magic():
+        '''
+        This function was created for when i am ready to move into the modeling phase.
+        The function will start fresh with the original dataset and made changes that i have found to
+        be helpful from my exploration phase.
+        This function will output train, validate, test and create clusters.
+        unneccessry columns will be dropped and dummy columns for categorical columns.
+        scaler , train, validate, and test will be returned
+        '''
+
+        # Define unneaded columns for dropping later
+
+        dropping_cols = ['lotsizesquarefeet', 'regionidcity', 'regionidzip', 'unitcnt', 'regionidcounty', 'yearbuilt',
+        'censustractandblock', 'logerror', 'transactiondate', 'heatingorsystemdesc', 'propertylandusedesc' ]
+
+        # get the zillow data from wrangle zillow
+        df = get_zillow_data()
+
+        df = clean_zillow(df)
+
+        df = absolute_logerror(df)
+
+        train, validate, test = split_data(df)
+
+        train, validate, test = handle_nulls(train, validate, test)
+
+        cont_columns = ['bathroomcnt','bedroomcnt','calculatedfinishedsquarefeet', 'dollars_per_sqft', 
+            'latitude', 'longitude', 'structuretaxvaluedollarcnt', 'taxvaluedollarcnt', 'landtaxvaluedollarcnt', 
+            'taxamount','age', 'taxrate', 'abs_logerror']
+
+        cat_columns = ['age_bin', 'county', 'lat_long_age_cluster']
+
+        cols_for_cluster = ['latitude', 'longitude', 'age']
+
+        train, validate, test, scaler = scale_this2(train, validate, test, cont_columns, MinMaxScaler())
+
+        train, validate, test, kmeans = create_clusters(train, validate, test, cols_for_cluster, 4, col_name = 'lat_long_age_cluster')
+
+        train, validate, test = get_zillow_dummies(train, validate, test)
+
+        return train, validate, test, scaler
+
+
+
+
+        
