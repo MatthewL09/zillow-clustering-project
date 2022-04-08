@@ -82,7 +82,7 @@ def clean_zillow(df):
     df['taxrate'] = df['taxamount'] / df['taxvaluedollarcnt']
     df['dollars_per_sqft'] = df['taxvaluedollarcnt'] / df['calculatedfinishedsquarefeet']
     df = age_bin(df)
-
+    df['abs_logerror'] = df['logerror'].abs()
     return df
 
 ######################################
@@ -232,15 +232,41 @@ def age_bin(df):
 
 ######################################
 
+def target_regplot(df, target, var_list, figsize = (8,5), hue = None):
+    '''
+    Takes in dataframe, target and varialbe list, and plots against target. 
+    '''
+    for var in var_list:
+        plt.figure(figsize = (figsize))
+        sns.regplot(data = df, x = var, y = target, 
+                line_kws={'color': 'purple'})
+        plt.tight_layout()
+
+######################################
+
+def show_pairplot(df):
+    col_list = ['bathroomcnt','bedroomcnt', 'calculatedfinishedsquarefeet', 'dollars_per_sqft','latitude','longitude',
+            'taxvaluedollarcnt','taxamount', 'age','taxrate','abs_logerror', 'logerror']
+
+    return sns.pairplot(data = df[col_list], corner=True)
+
+######################################
+
+def county_plots(df):
+    cols = [ 'age', 'latitude', 'longitude', 'dollars_per_sqft', 'calculatedfinishedsquarefeet', 'county']
+    sns.pairplot(data = df[cols], hue = 'county', corner = True)
+
+######################################
+
 def get_median_baseline(train, validate, test):
     '''
     function takes in train validate test.
     Adds column with the baseline predictions based on the mean of train to each dataframe.
     returns train, validate, test
     '''
-    train['baseline'] = train.abs_logerror.median()
-    validate['baseline'] = train.abs_logerror.median()
-    test['baseline'] = train.abs_logerror.median()
+    train['baseline'] = train.logerror.median()
+    validate['baseline'] = validate.logerror.median()
+    test['baseline'] = validate.logerror.median()
     
     return train, validate, test
 
@@ -325,6 +351,52 @@ def plot_inertia(X_data, k_range_start = 1, k_range_end = 10):
 
 ######################################
 
+def scatterplot_clusters(x ,y, cluster_col_name, df , kmeans, scaler, centroids):
+    
+    """ Takes in x and y (variable names as strings, along with returned objects from previous
+    function create_cluster and creates a plot"""
+
+    # set figsize
+    plt.figure(figsize=(10, 6))
+    
+    # scatterplot the clusters 
+    sns.scatterplot(x = x, y = y, data = df, hue = cluster_col_name, palette = 'cubehelix_r')
+    
+    # plot the centroids as Xs
+    centroids.plot.scatter(y=y, x= x, ax=plt.gca(), alpha=.60, s=500, c='black', marker = 'x')
+
+######################################
+
+def cluster_creator(X_data, k, col_name = None ):
+    '''
+    Function takes in scaled dataframe, k (number of clusters desired)
+    Optional arguemenet col_name, If none is entered column returned is {k}_k_clusters
+    Returns dataframe with column attached and dataframe with centroids (scaled) in it
+    Returns: X_data, centroids_scaled, kmeans
+    Use for exploring and when you need centroids
+    '''
+    
+    # make thing
+    kmeans = KMeans(n_clusters=k, random_state=123)
+
+    # Fit Thing
+    kmeans.fit(X_data)
+    
+    # create clusters
+    centroids_scaled = pd.DataFrame(kmeans.cluster_centers_, columns = list(X_data))
+    
+    if col_name == None:
+    #clusters on dataframe 
+        X_data['clusters'] = kmeans.predict(X_data)
+        X_data.clusters = X_data.clusters.astype('category')
+    else:
+        X_data[col_name] = kmeans.predict(X_data)
+        X_data[col_name] = X_data[col_name].astype('category')
+    
+    return X_data, centroids_scaled, kmeans
+
+######################################
+
 def scale_this2(train, validate, test, cont_columns, scaler): 
     '''
     This function takes in train, validate, and test, columns desired to be scaled (as a list), 
@@ -350,10 +422,10 @@ def scale_this2(train, validate, test, cont_columns, scaler):
 
 ######################################
 
-def create_clusters(train, validate, test, cols_for_cluster, k, col_name = None ):
+def create_clusters(train, validate, test, k, cols_for_cluster, col_name = None ):
     '''
     This function takes in scaled train, validate, and test
-    k (number of clusters desired) and cluster_columns that has been created specifically for clustering
+    k (number of clusters desired) and  cols_for_cluster that has been created specifically for clustering
     Optional argumenet col_name, none is defaulted so column returned is 'clusters'
     Returned dataframes with column attached  and kmeans
     Returns: train, validate, test, kmeans
@@ -384,6 +456,19 @@ def create_clusters(train, validate, test, cols_for_cluster, k, col_name = None 
         
     return train, validate, test, kmeans
 
+######################################
+# Create function to do seperate dataframes based on location
+def location_location(df):
+    '''
+    '''
+    # old
+    df_LA = df[df['county_Los_Angeles'] == 1]
+    
+    # new
+    df_not_LA = df[df['county_Los_Angeles'] == 0]
+    
+    return df_LA, df_not_LA
+
 ###################################### model prep ######################################
 
 def some_magic():
@@ -399,7 +484,7 @@ def some_magic():
         # Define unneaded columns for dropping later
 
         dropping_cols = ['lotsizesquarefeet', 'regionidcity', 'regionidzip', 'unitcnt', 'regionidcounty', 'yearbuilt',
-        'censustractandblock', 'logerror', 'transactiondate', 'heatingorsystemdesc', 'propertylandusedesc' ]
+        'censustractandblock', 'transactiondate', 'heatingorsystemdesc', 'propertylandusedesc' ]
 
         # get the zillow data from wrangle zillow
         df = get_zillow_data()
@@ -414,7 +499,7 @@ def some_magic():
 
         cont_columns = ['bathroomcnt','bedroomcnt','calculatedfinishedsquarefeet', 'dollars_per_sqft', 
             'latitude', 'longitude', 'structuretaxvaluedollarcnt', 'taxvaluedollarcnt', 'landtaxvaluedollarcnt', 
-            'taxamount','age', 'taxrate', 'abs_logerror']
+            'taxamount','age', 'taxrate']
 
         cat_columns = ['age_bin', 'county', 'lat_long_age_cluster']
 
@@ -422,7 +507,7 @@ def some_magic():
 
         train, validate, test, scaler = scale_this2(train, validate, test, cont_columns, MinMaxScaler())
 
-        train, validate, test, kmeans = create_clusters(train, validate, test, cols_for_cluster, 4, col_name = 'lat_long_age_cluster')
+        train, validate, test, kmeans = create_clusters(train, validate, test, 4, cols_for_cluster, col_name = 'lat_long_age_cluster')
 
         train, validate, test = get_zillow_dummies(train, validate, test)
 
